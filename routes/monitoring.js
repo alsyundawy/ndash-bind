@@ -131,6 +131,15 @@ async function getZonesStatus() {
         const zonesWithStatus = await Promise.all(
             zones.map(async (zone) => {
                 try {
+                    // Get full zone data with records
+                    let recordCount = 0;
+                    try {
+                        const zoneData = await bindService.getZone(zone.name);
+                        recordCount = zoneData.records ? zoneData.records.length : 0;
+                    } catch (e) {
+                        console.error(`Error getting records for ${zone.name}:`, e.message);
+                    }
+
                     // Check zone status
                     const { stdout } = await execAsync(`sudo rndc zonestatus ${zone.name} 2>&1`);
                     const serial = extractSerial(stdout);
@@ -140,15 +149,24 @@ async function getZonesStatus() {
                         type: zone.type,
                         status: 'loaded',
                         serial,
-                        records: zone.records || 0
+                        records: recordCount
                     };
                 } catch (error) {
+                    // Try to get record count even if zone status check fails
+                    let recordCount = 0;
+                    try {
+                        const zoneData = await bindService.getZone(zone.name);
+                        recordCount = zoneData.records ? zoneData.records.length : 0;
+                    } catch (e) {
+                        console.error(`Error getting records for ${zone.name}:`, e.message);
+                    }
+
                     return {
                         name: zone.name,
                         type: zone.type,
                         status: 'error',
                         serial: 'N/A',
-                        records: zone.records || 0
+                        records: recordCount
                     };
                 }
             })

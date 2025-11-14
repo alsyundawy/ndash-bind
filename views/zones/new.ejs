@@ -17,7 +17,7 @@
 <% } %>
 
 <div class="content-card max-w-2xl">
-    <form method="POST" action="/zones" class="space-y-6">
+    <form method="POST" action="/zones" class="space-y-6" id="createZoneForm">
         <div class="form-group">
             <label for="name" class="form-label">Zone Name *</label>
             <input type="text" id="name" name="name" class="form-input" placeholder="dionipe.id" required>
@@ -79,6 +79,23 @@
 </div>
 
 <script>
+// Trim all form inputs before submit
+document.getElementById('createZoneForm').addEventListener('submit', function(e) {
+    // Trim all text inputs
+    const inputs = this.querySelectorAll('input[type="text"]');
+    inputs.forEach(input => {
+        input.value = input.value.trim();
+    });
+    
+    // Validate zone name doesn't contain spaces
+    const zoneName = document.getElementById('name').value;
+    if (zoneName.includes(' ')) {
+        e.preventDefault();
+        alert('Zone name cannot contain spaces. Please remove any whitespace.');
+        return false;
+    }
+});
+
 // Auto-populate nameserver and email based on zone name
 document.getElementById('name').addEventListener('input', function() {
     const zoneName = this.value.trim();

@@ -32,6 +32,7 @@ const recordsRoutes = require('./routes/records');
 const settingsRoutes = require('./routes/settings');
 const monitoringRoutes = require('./routes/monitoring');
 const statisticsRoutes = require('./routes/statistics');
+const activityRoutes = require('./routes/activity');
 
 app.use('/', dashboardRoutes);
 app.use('/zones', zonesRoutes);
@@ -39,6 +40,7 @@ app.use('/records', recordsRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/monitoring', monitoringRoutes);
 app.use('/statistics', statisticsRoutes);
+app.use('/activity', activityRoutes);
 
 // Initialize Bind service and start server
 async function startServer() {

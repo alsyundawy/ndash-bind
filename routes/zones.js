@@ -59,10 +59,20 @@ router.get('/new/create', (req, res) => {
 // Add new zone (POST)
 router.post('/', async (req, res) => {
     try {
-        const { name, type, nameserver, email, domain } = req.body;
+        // Trim all input values to remove leading/trailing whitespace
+        const name = (req.body.name || '').trim();
+        const type = (req.body.type || '').trim();
+        const nameserver = (req.body.nameserver || '').trim();
+        const email = (req.body.email || '').trim();
+        const domain = (req.body.domain || '').trim();
         
         if (!name) {
             return res.redirect('/zones/new/create?error=' + encodeURIComponent('Zone name is required'));
+        }
+        
+        // Validate zone name doesn't contain spaces
+        if (name.includes(' ')) {
+            return res.redirect('/zones/new/create?error=' + encodeURIComponent('Zone name cannot contain spaces'));
         }
         
         const zoneData = {

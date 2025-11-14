@@ -6,6 +6,7 @@ const execPromise = util.promisify(exec);
 const config = require('../config');
 const bindConfig = require('../utils/bindConfig');
 const settingsUtil = require('../utils/settings');
+const { activityLogger } = require('../utils/activityLogger');
 
 /**
  * Bind Service - Handles all interactions with Bind DNS server
@@ -112,7 +113,16 @@ class BindService {
      */
     async createZone(data) {
         try {
-            const zoneName = data.name || data.zoneName;
+            // Get and clean zone name - remove leading/trailing whitespace
+            let zoneName = (data.name || data.zoneName || '').trim();
+            
+            // Validate zone name
+            if (!zoneName) {
+                throw new Error('Zone name is required');
+            }
+            
+            // Remove any extra spaces within the name
+            zoneName = zoneName.replace(/\s+/g, '');
             
             // Load settings to check if auto-reload is enabled
             const settings = await settingsUtil.loadSettings();
@@ -162,6 +172,12 @@ class BindService {
             } else {
                 console.log(`⚠ Auto-reload disabled - Manual reload required`);
             }
+            
+            // Log activity
+            await activityLogger.zoneCreated(zoneName, {
+                type: options.type || 'master',
+                zoneFile: zoneFile
+            });
             
             return {
                 success: true,
@@ -219,6 +235,12 @@ class BindService {
                 await this.reloadBind();
                 console.log(`✓ Auto-reload enabled - Bind reloaded`);
             }
+            
+            // Log activity
+            await activityLogger.recordCreated(zoneName, record.name, record.type, {
+                value: record.value,
+                ttl: record.ttl
+            });
             
             return { success: true };
         } catch (error) {
@@ -279,6 +301,9 @@ class BindService {
                 await this.reloadBind();
                 console.log(`✓ Auto-reload enabled - Bind reloaded`);
             }
+            
+            // Log activity
+            await activityLogger.recordDeleted(zoneName, recordName, recordType);
             
             return { success: true };
         } catch (error) {
@@ -355,6 +380,13 @@ class BindService {
                 console.log(`✓ Auto-reload enabled - Bind reloaded`);
             }
             
+            // Log activity
+            await activityLogger.recordUpdated(zoneName, newRecord.name, newRecord.type, {
+                oldValue: oldRecord.value,
+                newValue: newRecord.value,
+                ttl: newRecord.ttl
+            });
+            
             return { success: true };
         } catch (error) {
             throw new Error(`Failed to update record: ${error.message}`);
@@ -409,6 +441,11 @@ class BindService {
                 await this.reloadBind();
                 console.log(`✓ Auto-reload enabled - Bind reloaded`);
             }
+            
+            // Log activity
+            await activityLogger.zoneDeleted(zoneName, {
+                backupFile: backupFile
+            });
             
             return { success: true };
         } catch (error) {
@@ -467,8 +504,14 @@ $TTL ${ttl}
 
         if (isReverseZone) {
             // For reverse zones, add NS glue record with proper IP
-            const firstOctet = networkPrefix.split('.')[0];
-            zoneContent += `${ns}   IN      A       ${networkPrefix}.${firstOctet}\n`;
+            // Use provided IP or construct from network prefix (e.g., 103.142.214.1)
+            let nsIP = options.nsIP || options.nameserverIP;
+            if (!nsIP) {
+                // Construct IP: networkPrefix should be like "103.142.214"
+                // Add .1 as default first IP in subnet
+                nsIP = `${networkPrefix}.1`;
+            }
+            zoneContent += `${ns}   IN      A       ${nsIP}\n`;
             
             // Auto-generate PTR records only if enabled in settings
             const autoGeneratePTR = options.settings?.zones?.autoGeneratePTR !== false;
@@ -610,6 +653,10 @@ ${nsHostname}   IN      A       127.0.0.1
         try {
             const { stdout, stderr } = await execPromise('rndc reload');
             console.log(`✓ Bind reloaded successfully`);
+            
+            // Log activity
+            await activityLogger.bindReloaded();
+            
             return { success: true, message: stdout };
         } catch (error) {
             console.error(`✗ Failed to reload Bind: ${error.message}`);

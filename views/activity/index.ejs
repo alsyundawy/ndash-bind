@@ -1,0 +1,424 @@
+<%- include('../partials/header-standalone') %>
+
+<style>
+    .activity-badge {
+        @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    }
+    .activity-badge.create {
+        @apply bg-green-100 text-green-800;
+    }
+    .activity-badge.update {
+        @apply bg-blue-100 text-blue-800;
+    }
+    .activity-badge.delete {
+        @apply bg-red-100 text-red-800;
+    }
+    .activity-badge.reload {
+        @apply bg-purple-100 text-purple-800;
+    }
+    .activity-badge.view {
+        @apply bg-gray-100 text-gray-800;
+    }
+    .type-badge {
+        @apply inline-flex items-center px-2 py-1 rounded text-xs font-medium;
+    }
+    .type-badge.zone {
+        @apply bg-indigo-100 text-indigo-800;
+    }
+    .type-badge.record {
+        @apply bg-cyan-100 text-cyan-800;
+    }
+    .type-badge.system {
+        @apply bg-yellow-100 text-yellow-800;
+    }
+    .timeline-bar {
+        @apply bg-blue-500 rounded-t transition-all hover:bg-blue-600;
+    }
+</style>
+
+<div class="mb-6 flex items-center justify-between">
+    <div>
+        <h3 class="text-2xl font-bold text-gray-800">Activity Log</h3>
+        <p class="text-gray-600 mt-1">System activity and audit trail</p>
+    </div>
+    <div class="flex items-center space-x-3">
+        <button onclick="refreshData()" class="btn-sm btn-secondary">
+            <i class="fas fa-sync-alt mr-1" id="refresh-icon"></i>
+            Refresh
+        </button>
+        <button onclick="exportLogs()" class="btn-sm btn-primary">
+            <i class="fas fa-download mr-1"></i>
+            Export
+        </button>
+    </div>
+</div>
+
+<div class="space-y-6">
+                <!-- Statistics Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+                    <!-- Total Activities -->
+                    <div class="stat-card">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Total Activities</p>
+                                <p class="text-2xl font-bold text-gray-900 mt-1"><%= stats.total.toLocaleString() %></p>
+                            </div>
+                            <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-list text-blue-600 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Today -->
+                    <div class="stat-card">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">Today</p>
+                                <p class="text-2xl font-bold text-gray-900 mt-1"><%= stats.today %></p>
+                            </div>
+                            <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-calendar-day text-green-600 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- This Week -->
+                    <div class="stat-card">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">This Week</p>
+                                <p class="text-2xl font-bold text-gray-900 mt-1"><%= stats.week %></p>
+                            </div>
+                            <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-calendar-week text-purple-600 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- This Month -->
+                    <div class="stat-card">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <p class="text-sm font-medium text-gray-600">This Month</p>
+                                <p class="text-2xl font-bold text-gray-900 mt-1"><%= stats.month %></p>
+                            </div>
+                            <div class="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-calendar-alt text-orange-600 text-xl"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    <!-- Activity Timeline -->
+                    <div class="lg:col-span-2 bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-chart-line text-blue-600 mr-2"></i>
+                            Activity Timeline (Last 7 Days)
+                        </h3>
+                        <div class="flex items-end justify-between h-48 space-x-2">
+                            <% timeline.forEach(day => { %>
+                                <div class="flex-1 flex flex-col items-center">
+                                    <div class="relative w-full flex flex-col items-center justify-end h-40" style="height: 160px;">
+                                        <% if (day.total > 0) { %>
+                                            <div class="timeline-bar w-full cursor-pointer" 
+                                                 style="height: <%= Math.max((day.total / Math.max(...timeline.map(d => d.total))) * 150, 10) %>px;"
+                                                 title="<%= day.date %>: <%= day.total %> activities">
+                                            </div>
+                                            <span class="text-xs font-medium text-gray-700 mt-1"><%= day.total %></span>
+                                        <% } else { %>
+                                            <div class="w-full bg-gray-200 rounded-t" style="height: 5px;"></div>
+                                            <span class="text-xs font-medium text-gray-400 mt-1">0</span>
+                                        <% } %>
+                                    </div>
+                                    <span class="text-xs text-gray-600 mt-2"><%= day.day %></span>
+                                </div>
+                            <% }); %>
+                        </div>
+                    </div>
+
+                    <!-- Activity by Type -->
+                    <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-chart-pie text-blue-600 mr-2"></i>
+                            By Type
+                        </h3>
+                        <div class="space-y-4">
+                            <% 
+                            const totalByType = Object.values(stats.byType).reduce((a, b) => a + b, 0);
+                            Object.entries(stats.byType).sort((a, b) => b[1] - a[1]).forEach(([type, count]) => { 
+                                const percentage = totalByType > 0 ? ((count / totalByType) * 100).toFixed(1) : 0;
+                            %>
+                                <div>
+                                    <div class="flex items-center justify-between mb-1">
+                                        <span class="text-sm font-medium text-gray-700 capitalize flex items-center">
+                                            <% if (type === 'zone') { %>
+                                                <i class="fas fa-globe text-indigo-600 mr-2 w-4"></i>
+                                            <% } else if (type === 'record') { %>
+                                                <i class="fas fa-list text-cyan-600 mr-2 w-4"></i>
+                                            <% } else { %>
+                                                <i class="fas fa-cog text-yellow-600 mr-2 w-4"></i>
+                                            <% } %>
+                                            <%= type %>
+                                        </span>
+                                        <span class="text-sm text-gray-600"><%= count %> (<%= percentage %>%)</span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 rounded-full h-2">
+                                        <div class="<%= type === 'zone' ? 'bg-indigo-600' : type === 'record' ? 'bg-cyan-600' : 'bg-yellow-600' %> h-2 rounded-full" 
+                                             style="width: <%= percentage %>%">
+                                        </div>
+                                    </div>
+                                </div>
+                            <% }); %>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    <!-- Activity by Action -->
+                    <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-tasks text-blue-600 mr-2"></i>
+                            By Action
+                        </h3>
+                        <div class="space-y-3">
+                            <% Object.entries(stats.byAction).sort((a, b) => b[1] - a[1]).forEach(([action, count]) => { %>
+                                <div class="flex items-center justify-between">
+                                    <span class="activity-badge <%= action %>">
+                                        <%= action.charAt(0).toUpperCase() + action.slice(1) %>
+                                    </span>
+                                    <span class="text-sm font-medium text-gray-700"><%= count %></span>
+                                </div>
+                            <% }); %>
+                        </div>
+                    </div>
+
+                    <!-- Most Active Zones -->
+                    <div class="lg:col-span-2 bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                            <i class="fas fa-fire text-blue-600 mr-2"></i>
+                            Most Active Zones
+                        </h3>
+                        <% if (stats.recentZones.length > 0) { %>
+                            <div class="space-y-3">
+                                <% stats.recentZones.forEach((item, index) => { %>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex items-center space-x-3">
+                                            <span class="flex items-center justify-center w-6 h-6 bg-blue-100 text-blue-600 rounded-full text-xs font-bold">
+                                                <%= index + 1 %>
+                                            </span>
+                                            <span class="text-sm font-medium text-gray-900"><%= item.zone %></span>
+                                        </div>
+                                        <span class="text-sm text-gray-600"><%= item.count %> activities</span>
+                                    </div>
+                                <% }); %>
+                            </div>
+                        <% } else { %>
+                            <p class="text-sm text-gray-500 text-center py-4">No zone activities yet</p>
+                        <% } %>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="bg-white rounded-lg shadow-sm p-4 border border-gray-200 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Type</label>
+                            <select id="filterType" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                <option value="all">All Types</option>
+                                <option value="zone">Zone</option>
+                                <option value="record">Record</option>
+                                <option value="system">System</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Action</label>
+                            <select id="filterAction" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                                <option value="all">All Actions</option>
+                                <option value="create">Create</option>
+                                <option value="update">Update</option>
+                                <option value="delete">Delete</option>
+                                <option value="reload">Reload</option>
+                                <option value="view">View</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Zone</label>
+                            <input type="text" id="filterZone" placeholder="Filter by zone..." 
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div class="flex items-end">
+                            <button onclick="applyFilters()" class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                <i class="fas fa-filter mr-2"></i>Apply Filters
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Activity Log Table -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h3 class="text-lg font-semibold text-gray-900 flex items-center">
+                            <i class="fas fa-list-ul text-blue-600 mr-2"></i>
+                            Recent Activities
+                            <span class="ml-2 text-sm font-normal text-gray-500">(Last 100 entries)</span>
+                        </h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Zone</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200" id="activityTableBody">
+                                <% if (activities.length > 0) { %>
+                                    <% activities.forEach(activity => { %>
+                                        <tr class="hover:bg-gray-50">
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                <%= new Date(activity.timestamp).toLocaleString('en-US', {
+                                                    year: 'numeric',
+                                                    month: 'short',
+                                                    day: 'numeric',
+                                                    hour: '2-digit',
+                                                    minute: '2-digit'
+                                                }) %>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="type-badge <%= activity.type %>">
+                                                    <%= activity.type %>
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap">
+                                                <span class="activity-badge <%= activity.action %>">
+                                                    <%= activity.action %>
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                <%= activity.zone || '-' %>
+                                            </td>
+                                            <td class="px-6 py-4 text-sm text-gray-700">
+                                                <%= activity.description %>
+                                            </td>
+                                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                                <i class="fas fa-user-circle mr-1"></i>
+                                                <%= activity.user || 'Administrator' %>
+                                            </td>
+                                        </tr>
+                                    <% }); %>
+                                <% } else { %>
+                                    <tr>
+                                        <td colspan="6" class="px-6 py-12 text-center text-sm text-gray-500">
+                                            <i class="fas fa-inbox text-4xl text-gray-300 mb-3"></i>
+                                            <p>No activities logged yet</p>
+                                        </td>
+                                    </tr>
+                                <% } %>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+</div>
+
+<script>
+    function refreshData() {
+        const icon = document.getElementById('refresh-icon');
+        icon.classList.add('fa-spin');
+        
+        fetch('/activity/api/stats')
+            .then(response => response.json())
+            .then(data => {
+                icon.classList.remove('fa-spin');
+                if (data.success) {
+                    location.reload();
+                    }
+                })
+                .catch(error => {
+                    icon.classList.remove('fa-spin');
+                    console.error('Error refreshing data:', error);
+                });
+        }
+
+        function applyFilters() {
+            const type = document.getElementById('filterType').value;
+            const action = document.getElementById('filterAction').value;
+            const zone = document.getElementById('filterZone').value;
+
+            const params = new URLSearchParams();
+            if (type !== 'all') params.append('type', type);
+            if (action !== 'all') params.append('action', action);
+            if (zone) params.append('zone', zone);
+
+            fetch(`/activity/api/logs?${params.toString()}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        updateActivityTable(data.activities);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error applying filters:', error);
+                });
+        }
+
+        function updateActivityTable(activities) {
+            const tbody = document.getElementById('activityTableBody');
+            
+            if (activities.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="px-6 py-12 text-center text-sm text-gray-500">
+                            <i class="fas fa-search text-4xl text-gray-300 mb-3"></i>
+                            <p>No activities found matching the filters</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = activities.map(activity => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        ${new Date(activity.timestamp).toLocaleString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        })}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="type-badge ${activity.type}">
+                            ${activity.type}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="activity-badge ${activity.action}">
+                            ${activity.action}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        ${activity.zone || '-'}
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-700">
+                        ${activity.description}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <i class="fas fa-user-circle mr-1"></i>
+                        ${activity.user || 'Administrator'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function exportLogs() {
+            window.location.href = '/activity/api/logs?limit=1000';
+        }
+    </script>
+
+<%- include('../partials/footer-standalone') %>
