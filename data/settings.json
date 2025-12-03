@@ -20,32 +20,21 @@
       "94.140.14.14",
       "94.140.15.15"
     ],
-    "queryLogging": false,
+    "queryLogging": true,
     "cacheSize": "256M",
     "dnssecValidation": true,
     "adblock": {
       "enabled": true,
       "blocklistUrls": [
         "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-        "http://pgl.yoyo.org/adservers/serverlist.php?hostformat=bindconfig&showintro=0&mimetype=plaintext",
-        "https://raw.githubusercontent.com/oznu/dns-zone-blacklist/master/bind/bind-nxdomain.blacklist",
-        "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
         "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/pro.txt",
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/tif.txt",
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/fake.txt",
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/popupads.txt",
-        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/spam-tlds-rpz.txt"
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/pro.txt",
+        "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/rpz/tif.txt"
       ],
       "redirectTo": "0.0.0.0",
-      "customDomains": [
-        "wzb.eu"
-      ],
-      "wildcardEnabled": true,
-      "wildcardDomains": [
-        "*.hereyourhotlady.com",
-        "*.sweetkissesclub.com",
-        "*.sweetxladies.com"
-      ]
+      "customDomains": [],
+      "wildcardEnabled": false,
+      "wildcardDomains": []
     },
     "doh": {
       "enabled": true,
@@ -58,6 +47,43 @@
       "port": 853,
       "certPath": "/etc/ssl/certs/ndash.crt",
       "keyPath": "/etc/ssl/private/ndash.key"
-    }
+    },
+    "views": [
+      {
+        "name": "internal2",
+        "acl": {
+          "allow": [
+            "10.0.0.0/8",
+            "192.168.0.0/16"
+          ],
+          "deny": []
+        },
+        "zones": [
+          "test3.example.com"
+        ]
+      },
+      {
+        "name": "internal6",
+        "acl": {
+          "allow": [
+            "any"
+          ],
+          "deny": []
+        },
+        "zones": [
+          "test2.example.com"
+        ]
+      },
+      {
+        "name": "global",
+        "acl": {
+          "allow": [
+            "any"
+          ],
+          "deny": []
+        },
+        "zones": []
+      }
+    ]
   }
 }

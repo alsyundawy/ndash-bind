@@ -34,6 +34,8 @@ const monitoringRoutes = require('./routes/monitoring');
 const statisticsRoutes = require('./routes/statistics');
 const activityRoutes = require('./routes/activity');
 const resolverRoutes = require('./routes/resolver');
+const viewsRoutes = require('./routes/views');
+const aclRoutes = require('./routes/acl');
 
 app.use('/', dashboardRoutes);
 app.use('/zones', zonesRoutes);
@@ -43,6 +45,25 @@ app.use('/monitoring', monitoringRoutes);
 app.use('/statistics', statisticsRoutes);
 app.use('/activity', activityRoutes);
 app.use('/resolver', resolverRoutes);
+app.use('/views', viewsRoutes);
+app.use('/acl', aclRoutes);
+
+// Test route for toast notifications
+app.get('/test-toast', (req, res) => {
+    res.render('test-toast', {
+        title: 'Toast Notification Test',
+        success: req.query.success,
+        error: req.query.error,
+        warning: req.query.warning,
+        info: req.query.info
+    });
+});
+
+app.post('/test-toast', (req, res) => {
+    const { type, message, title } = req.body;
+    // Redirect back with the appropriate flash message
+    res.redirect(`/test-toast?${type}=${encodeURIComponent(message)}&title=${encodeURIComponent(title || '')}`);
+});
 
 // Initialize Bind service and start server
 async function startServer() {

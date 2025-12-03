@@ -1,0 +1,38 @@
+<%- include('../partials/header-standalone') %>
+
+<div class="mb-6">
+    <a href="/views" class="text-blue-600 hover:text-blue-700 flex items-center mb-4">
+        <i class="fas fa-arrow-left mr-2"></i>
+        Back to Views
+    </a>
+    <h3 class="text-2xl font-bold text-gray-800">Edit ACL View: <%= view.name %></h3>
+    <p class="text-gray-600 mt-1">Modify the ACL and client rules for this view</p>
+</div>
+
+<div class="content-card max-w-2xl">
+    <form method="POST" action="/views/<%= view.name %>" class="space-y-6">
+        <div class="form-group">
+            <label class="form-label">View Name</label>
+            <input type="text" value="<%= view.name %>" class="form-input" disabled>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Allow (match-clients)</label>
+            <textarea name="allow" rows="3" class="form-input"><%= view.acl && view.acl.allow ? view.acl.allow.join('\n') : 'any' %></textarea>
+            <p class="form-help">List of networks to allow accessing this view (one per line). Use 'any' to allow all.</p>
+        </div>
+
+        <div class="form-group">
+            <label class="form-label">Deny</label>
+            <textarea name="deny" rows="3" class="form-input"><%= view.acl && view.acl.deny ? view.acl.deny.join('\n') : '' %></textarea>
+            <p class="form-help">List of networks to deny (one per line). Keep empty if none.</p>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <button type="submit" class="btn btn-primary"><i class="fas fa-save mr-2"></i>Save Changes</button>
+            <a href="/views" class="btn">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<%- include('../partials/footer-standalone') %>

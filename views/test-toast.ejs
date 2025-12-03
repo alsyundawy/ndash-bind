@@ -1,0 +1,103 @@
+<%- include('partials/header-standalone') %>
+
+<div class="mb-6">
+    <h3 class="text-2xl font-bold text-gray-800">Toast Notification Test</h3>
+    <p class="text-gray-600 mt-1">Test the toast notification system</p>
+</div>
+
+<% if (typeof success !== 'undefined' && success) { %>
+    <div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-4">
+        <%= success %>
+    </div>
+<% } %>
+
+<% if (typeof error !== 'undefined' && error) { %>
+    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+        <%= error %>
+    </div>
+<% } %>
+
+<% if (typeof warning !== 'undefined' && warning) { %>
+    <div class="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded mb-4">
+        <%= warning %>
+    </div>
+<% } %>
+
+<% if (typeof info !== 'undefined' && info) { %>
+    <div class="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded mb-4">
+        <%= info %>
+    </div>
+<% } %>
+
+<!-- Test Form -->
+<div class="content-card mb-6">
+    <h4 class="text-lg font-semibold mb-4">Test Toast Notifications</h4>
+    <form method="POST" action="/test-toast" class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Toast Type</label>
+                <select name="type" class="form-select">
+                    <option value="success">Success</option>
+                    <option value="error">Error</option>
+                    <option value="warning">Warning</option>
+                    <option value="info">Info</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Title (optional)</label>
+                <input type="text" name="title" class="form-input" placeholder="Custom title">
+            </div>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Message</label>
+            <textarea name="message" rows="3" class="form-input" placeholder="Enter your toast message here...">This is a test toast notification!</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">
+            <i class="fas fa-bell mr-2"></i>
+            Show Toast
+        </button>
+    </form>
+</div>
+
+<!-- Quick Test Buttons -->
+<div class="content-card">
+    <h4 class="text-lg font-semibold mb-4">Quick Tests</h4>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <button onclick="showSuccessToast('Operation completed successfully!')" class="btn btn-success">
+            <i class="fas fa-check-circle mr-2"></i>
+            Success
+        </button>
+        <button onclick="showErrorToast('An error occurred while processing your request.')" class="btn btn-danger">
+            <i class="fas fa-exclamation-circle mr-2"></i>
+            Error
+        </button>
+        <button onclick="showWarningToast('Please review your input before proceeding.')" class="btn btn-warning">
+            <i class="fas fa-exclamation-triangle mr-2"></i>
+            Warning
+        </button>
+        <button onclick="showInfoToast('New updates are available for your system.')" class="btn btn-info">
+            <i class="fas fa-info-circle mr-2"></i>
+            Info
+        </button>
+    </div>
+</div>
+
+<!-- JavaScript Test -->
+<script>
+    // Test automatic conversion of server messages
+    <% if (typeof success !== 'undefined' && success) { %>
+        console.log('Server success message:', '<%= success %>');
+    <% } %>
+    <% if (typeof error !== 'undefined' && error) { %>
+        console.log('Server error message:', '<%= error %>');
+    <% } %>
+    <% if (typeof warning !== 'undefined' && warning) { %>
+        console.log('Server warning message:', '<%= warning %>');
+    <% } %>
+    <% if (typeof info !== 'undefined' && info) { %>
+        console.log('Server info message:', '<%= info %>');
+    <% } %>
+</script>
+
+<%- include('partials/footer-standalone') %></content>
+<parameter name="filePath">/opt/ndash/views/test-toast.ejs

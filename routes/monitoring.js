@@ -128,8 +128,10 @@ async function getBindStatus() {
 async function getZonesStatus() {
     try {
         const zones = await bindService.listZones();
+        // Filter out special zones like "." which are not real zones
+        const realZones = zones.filter(z => z.name !== '.');
         const zonesWithStatus = await Promise.all(
-            zones.map(async (zone) => {
+            realZones.map(async (zone) => {
                 try {
                     // Get full zone data with records
                     let recordCount = 0;
@@ -141,7 +143,13 @@ async function getZonesStatus() {
                     }
 
                     // Check zone status
-                    const { stdout } = await execAsync(`sudo rndc zonestatus ${zone.name} 2>&1`);
+                    // For zones in specific views, include view name in command
+                    let statusCmd = `sudo rndc zonestatus ${zone.name}`;
+                    if (zone.view) {
+                        statusCmd += ` in ${zone.view}`;
+                    }
+                    
+                    const { stdout } = await execAsync(`${statusCmd} 2>&1`);
                     const serial = extractSerial(stdout);
                     
                     return {
@@ -152,6 +160,8 @@ async function getZonesStatus() {
                         records: recordCount
                     };
                 } catch (error) {
+                    console.warn(`Could not get zone status for ${zone.name}:`, error.message);
+                    
                     // Try to get record count even if zone status check fails
                     let recordCount = 0;
                     try {
@@ -161,10 +171,17 @@ async function getZonesStatus() {
                         console.error(`Error getting records for ${zone.name}:`, e.message);
                     }
 
+                    // For slave zones that haven't loaded yet, show "pending" status instead of error
+                    let status = 'error';
+                    const errorMsg = (error.stdout || error.message || error.toString()).toString();
+                    if (zone.type === 'slave' && errorMsg.includes('zone not loaded')) {
+                        status = 'pending';
+                    }
+
                     return {
                         name: zone.name,
                         type: zone.type,
-                        status: 'error',
+                        status: status,
                         serial: 'N/A',
                         records: recordCount
                     };

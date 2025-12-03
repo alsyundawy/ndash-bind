@@ -88,12 +88,12 @@ async function getResolverStatisticsData() {
 
         const resolverStats = {
             enabled: true,
-            queryStats,
-            cacheStats,
-            forwarderStats,
-            responseStats,
-            adblockStats,
-            encryptedDnsStats,
+            queryStats: queryStats || { totalQueries: 0, queriesPerSecond: '0', queryTypes: {}, timeRange: 'Last 24 hours' },
+            cacheStats: cacheStats || { cacheHits: 0, cacheMisses: 0, cacheHitRate: '0%', totalCacheOperations: 0 },
+            forwarderStats: forwarderStats || { configuredForwarders: 0, forwarders: [] },
+            responseStats: responseStats || { averageResponseTime: 0, minResponseTime: 0, maxResponseTime: 0, responseTimeDistribution: {} },
+            adblockStats: adblockStats || { enabled: false, blockedDomains: 0, redirectTo: '0.0.0.0' },
+            encryptedDnsStats: encryptedDnsStats || { doh: { enabled: false }, dot: { enabled: false } },
             lastUpdated: new Date().toISOString()
         };
 
@@ -101,7 +101,7 @@ async function getResolverStatisticsData() {
             resolverEnabled: true,
             resolverStats,
             resolverConfig,
-            topQueriedDomains
+            topQueriedDomains: topQueriedDomains || []
         };
     } catch (error) {
         console.error('Error getting resolver statistics data:', error);
@@ -140,13 +140,15 @@ async function getQueryStatistics() {
 
         lines.forEach(line => {
             // Parse BIND query log format
-            // Example: 14-Nov-2025 22:28:32.821 client @0x7f776aae7000 192.168.203.254#20984 (cloud.mikrotik.com): query: cloud.mikrotik.com IN A + (192.168.203.11)
-            const queryMatch = line.match(/(\d{2}-\w{3}-\d{4} \d{2}:\d{2}:\d{2}\.\d{3}) client\s+@\w+\s+([^#]+)#\d+\s+\(([^)]+)\):\s+query:\s+([^\s]+)\s+(\w+)\s+(\w+)\s+\+(\s*\([^)]+\))?/);
+            // Example: 04-Dec-2025 00:10:51.106 client @0x7f2288196400 192.168.203.102#39010 (ipapi.co): view global: query: ipapi.co IN A + (192.168.203.11)
+            // Format: timestamp client @addr IP#port (domain): view viewname: query: domain CLASS TYPE + (response)
+            const queryMatch = line.match(/(\d{2}-\w{3}-\d{4} \d{2}:\d{2}:\d{2}\.\d{3})\s+client\s+@\w+\s+([^#]+)#\d+\s+\(([^)]+)\):(?:\s+view\s+\w+:)?\s+query:\s+([^\s]+)\s+(\w+)\s+(\w+)\s+\+/);
             if (queryMatch) {
                 const timestamp = new Date(queryMatch[1]).getTime();
-                const client = queryMatch[2];
-                const domain = queryMatch[4]; // Use the domain after "query:"
-                const queryType = queryMatch[6]; // A, AAAA, etc.
+                const client = queryMatch[2].trim();
+                const domain = queryMatch[4]; // Domain in query line
+                const queryClass = queryMatch[5]; // IN, CH, HS, etc.
+                const queryType = queryMatch[6]; // A, AAAA, MX, etc.
 
                 if (timestamp > twentyFourHoursAgo) {
                     recentQueries.push({
@@ -156,7 +158,7 @@ async function getQueryStatistics() {
                         client
                     });
 
-                    // Count query types
+                    // Count query types (A, AAAA, MX, etc.)
                     queryTypes[queryType] = (queryTypes[queryType] || 0) + 1;
                 }
             }

@@ -31,6 +31,7 @@
                 <tr>
                     <th>Zone Name</th>
                     <th>Type</th>
+                    <th>View</th>
                     <th>Records</th>
                     <th>Status</th>
                     <th>Last Modified</th>
@@ -57,6 +58,9 @@
                                 <span class="badge badge-info"><%= zone.type %></span>
                             </td>
                             <td>
+                                <span class="text-sm text-gray-700"><%= zone.view || 'global' %></span>
+                            </td>
+                            <td>
                                 <span class="text-gray-700"><%= zone.records %> records</span>
                             </td>
                             <td>
@@ -73,11 +77,28 @@
                                     <a href="/zones/<%= zone.name %>" class="btn btn-sm" title="View Details">
                                         <i class="fas fa-eye"></i>
                                     </a>
+                                    <% if (zone.name !== '.' && zone.name !== 'adblock') { %>
+                                    <form method="POST" action="/zones/<%= zone.name %>/reassign" class="inline">
+                                        <select name="view" class="form-select form-select-sm mr-2">
+                                                <option value="global" <%= (!zone.view || zone.view === 'global') ? 'selected' : '' %>>global</option>
+                                            <% if (views && views.length) { %>
+                                                <% views.filter(v => v.name !== 'global').forEach(v => { %>
+                                                    <option value="<%= v.name %>" <%= (zone.view === v.name) ? 'selected' : '' %>><%= v.name %></option>
+                                                <% }); %>
+                                            <% } %>
+                                        </select>
+                                        <button type="submit" class="btn btn-sm" title="Move">
+                                            <i class="fas fa-exchange-alt"></i>
+                                        </button>
+                                    </form>
+                                    <% } %>
+                                    <% if (zone.name !== '.' && zone.name !== 'adblock') { %>
                                     <form method="POST" action="/zones/<%= zone.name %>/delete" class="inline" onsubmit="return confirm('Are you sure you want to delete zone <%= zone.name %>?');">
                                         <button type="submit" class="btn btn-sm btn-danger" title="Delete">
                                             <i class="fas fa-trash"></i>
                                         </button>
                                     </form>
+                                    <% } %>
                                 </div>
                             </td>
                         </tr>

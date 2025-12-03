@@ -147,9 +147,12 @@ router.post('/', async (req, res) => {
         
         await settingsUtil.updateSettings(updates);
         
-        // Apply resolver configuration if enabled/disabled
+        // Apply resolver configuration if resolver settings were changed
         const bindService = require('../services/bindService');
-        if (enableResolver === 'on') {
+        if (resolverUpdates.enabled) {
+            await bindService.enableResolver(resolverUpdates);
+        } else if (currentSettings.resolver?.enabled) {
+            // If resolver was enabled and settings changed, reconfigure it
             await bindService.enableResolver(resolverUpdates);
         } else {
             await bindService.disableResolver();

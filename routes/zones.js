@@ -2,24 +2,31 @@ const express = require('express');
 const router = express.Router();
 const moment = require('moment');
 const bindService = require('../services/bindService');
+const settingsUtil = require('../utils/settings');
 
 // List all zones
 router.get('/', async (req, res) => {
     try {
         const zones = await bindService.listZones();
-        
+        const settings = await settingsUtil.loadSettings();
+        const views = settings.resolver?.views || [];
+
         res.render('zones/list', {
             title: 'DNS Zones',
             zones: zones,
+            views,
             moment,
             error: req.query.error,
             success: req.query.success
         });
     } catch (error) {
         console.error('Error listing zones:', error);
+        const settings2 = await settingsUtil.loadSettings().catch(()=>({}));
+        const views2 = settings2.resolver?.views || [];
         res.render('zones/list', {
             title: 'DNS Zones',
             zones: [],
+            views: views2,
             moment,
             error: 'Failed to load zones: ' + error.message
         });
@@ -50,9 +57,12 @@ router.get('/:zoneName', async (req, res) => {
 });
 
 // Add new zone (GET form)
-router.get('/new/create', (req, res) => {
+router.get('/new/create', async (req, res) => {
+    const settingsUtil = require('../utils/settings');
+    const settings = await settingsUtil.loadSettings();
     res.render('zones/new', {
-        title: 'Create New Zone'
+        title: 'Create New Zone',
+        views: settings.resolver?.views || []
     });
 });
 
@@ -81,6 +91,7 @@ router.post('/', async (req, res) => {
             nameserver: nameserver || `ns1.${name}.`,
             email: email || `admin.${name}.`
         };
+        if (req.body.view) zoneData.view = req.body.view;
         
         // Add domain for reverse zones
         if (domain && name.includes('in-addr.arpa')) {
@@ -105,6 +116,20 @@ router.post('/:zoneName/delete', async (req, res) => {
         res.redirect('/zones?success=' + encodeURIComponent(`Zone ${zoneName} deleted successfully`));
     } catch (error) {
         console.error('Error deleting zone:', error);
+        res.redirect('/zones?error=' + encodeURIComponent(error.message));
+    }
+});
+
+// Reassign zone to different view
+router.post('/:zoneName/reassign', async (req, res) => {
+    try {
+        const zoneName = req.params.zoneName;
+        const newViewRaw = (req.body.view || '').trim();
+        const newView = newViewRaw === '' ? 'global' : newViewRaw;
+        await bindService.reassignZone(zoneName, newView);
+        res.redirect('/zones?success=' + encodeURIComponent(`Zone ${zoneName} moved to ${newView || 'global'}`));
+    } catch (error) {
+        console.error('Error reassigning zone:', error);
         res.redirect('/zones?error=' + encodeURIComponent(error.message));
     }
 });

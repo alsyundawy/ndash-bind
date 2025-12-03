@@ -44,6 +44,17 @@ const DEFAULT_SETTINGS = {
             certPath: '/etc/ssl/certs/ndash.crt',
             keyPath: '/etc/ssl/private/ndash.key'
         }
+        ,
+        views: [
+            {
+                name: 'default',
+                acl: {
+                    allow: ['any'],
+                    deny: []
+                },
+                zones: []
+            }
+        ]
     }
 };
 

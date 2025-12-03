@@ -25,6 +25,17 @@ class BindService {
         try {
             await fs.ensureDir(this.zonesPath);
             console.log(`✓ Bind zones directory ready: ${this.zonesPath}`);
+            // If views configured, ensure zones from other files (like root-hints) are moved into a 'global' view
+            try {
+                const settings = await settingsUtil.loadSettings();
+                const viewsList = settings.resolver?.views || [];
+                if (viewsList.length > 0) {
+                    // Move root-hints zones into global view if needed
+                    await bindConfig.moveZonesFromFileToGlobal('/etc/bind/named.conf.root-hints', 'global', { allow: ['any'] });
+                }
+            } catch (err) {
+                console.warn('Failed to ensure zones from other config files moved to views:', err.message);
+            }
             return true;
         } catch (error) {
             console.error(`✗ Failed to initialize Bind service: ${error.message}`);
@@ -38,45 +49,106 @@ class BindService {
     async listZones() {
         try {
             const configContent = await fs.readFile(this.namedConfLocal, 'utf8');
-            const zones = [];
-            
-            // Parse zone blocks from named.conf.local
-            const zoneRegex = /zone\s+"([^"]+)"\s+\{[^}]*file\s+"([^"]+)";[^}]*\}/g;
+            const zonesMap = new Map(); // Use Map to deduplicate by zone name
+
+            // Helper function to extract zone type from zone block
+            const extractZoneType = (zoneBlock) => {
+                const typeMatch = /type\s+(\w+);/.exec(zoneBlock);
+                return typeMatch ? typeMatch[1] : 'master';
+            };
+
+            // Parse view blocks first and collect zones with view assignment
+            const viewRegex = /view\s+"([^"]+)"\s*\{([\s\S]*?)\n\};/g;
+            let vmatch;
+            while ((vmatch = viewRegex.exec(configContent)) !== null) {
+                const viewName = vmatch[1];
+                const viewBody = vmatch[2];
+                const zoneRegex = /zone\s+"([^"]+)"\s*\{([\s\S]*?)\};/g;
+                let zmatch;
+                while ((zmatch = zoneRegex.exec(viewBody)) !== null) {
+                    const zoneName = zmatch[1];
+                    const zoneBlockContent = zmatch[2];
+                    const fileMatch = /file\s+"([^"]+)";/.exec(zoneBlockContent);
+                    if (!fileMatch) continue;
+                    
+                    const zoneFile = fileMatch[1].startsWith('/') ? fileMatch[1] : path.join('/etc/bind', fileMatch[1]);
+                    
+                    // Skip if we already have this zone
+                    if (zonesMap.has(zoneName)) continue;
+                    
+                    const zoneType = extractZoneType(zoneBlockContent);
+                    
+                    let lastModified = new Date();
+                    let recordCount = 0;
+                    try {
+                        const stats = await fs.stat(zoneFile);
+                        lastModified = stats.mtime;
+                        const zoneContent = await fs.readFile(zoneFile, 'utf8');
+                        const records = this.parseZoneFile(zoneContent);
+                        recordCount = records.length;
+                    } catch (err) {
+                        console.warn(`Warning: Could not read zone file ${zoneFile}`);
+                    }
+                    
+                    zonesMap.set(zoneName, {
+                        id: zonesMap.size + 1,
+                        name: zoneName,
+                        type: zoneType,
+                        file: zoneFile,
+                        status: 'active',
+                        records: recordCount,
+                        lastModified: lastModified,
+                        view: viewName
+                    });
+                }
+            }
+
+            // Parse top-level zone blocks (not inside a view)
+            // Remove all view blocks so we only process top-level zones
+            const contentWithoutViews = configContent.replace(viewRegex, '\n');
+            const zoneRegex = /zone\s+"([^"]+)"\s+\{([\s\S]*?)\};/g;
             let match;
-            
-            while ((match = zoneRegex.exec(configContent)) !== null) {
+            while ((match = zoneRegex.exec(contentWithoutViews)) !== null) {
                 const zoneName = match[1];
-                const zoneFile = match[2];
-                const fullPath = zoneFile.startsWith('/') ? zoneFile : path.join('/etc/bind', zoneFile);
+                const zoneBlockContent = match[2];
+                const fileMatch = /file\s+"([^"]+)";/.exec(zoneBlockContent);
+                if (!fileMatch) continue;
+                
+                const zoneFile = fileMatch[1].startsWith('/') ? fileMatch[1] : path.join('/etc/bind', fileMatch[1]);
+                
+                // Skip if we already have this zone
+                if (zonesMap.has(zoneName)) continue;
+            
+                const zoneType = extractZoneType(zoneBlockContent);
                 
                 // Get zone file stats
                 let lastModified = new Date();
                 let recordCount = 0;
                 
                 try {
-                    const stats = await fs.stat(fullPath);
+                    const stats = await fs.stat(zoneFile);
                     lastModified = stats.mtime;
                     
                     // Count records in zone file
-                    const zoneContent = await fs.readFile(fullPath, 'utf8');
+                    const zoneContent = await fs.readFile(zoneFile, 'utf8');
                     const records = this.parseZoneFile(zoneContent);
                     recordCount = records.length;
                 } catch (err) {
-                    console.warn(`Warning: Could not read zone file ${fullPath}`);
+                    console.warn(`Warning: Could not read zone file ${zoneFile}`);
                 }
                 
-                zones.push({
-                    id: zones.length + 1,
+                zonesMap.set(zoneName, {
+                    id: zonesMap.size + 1,
                     name: zoneName,
-                    type: 'master',
-                    file: fullPath,
+                    type: zoneType,
+                    file: zoneFile,
                     status: 'active',
                     records: recordCount,
                     lastModified: lastModified
                 });
             }
             
-            return zones;
+            return Array.from(zonesMap.values());
         } catch (error) {
             console.error(`Error listing zones: ${error.message}`);
             return [];
@@ -161,8 +233,32 @@ class BindService {
             await fs.writeFile(zoneFile, zoneContent, 'utf8');
             console.log(`✓ Created zone file: ${zoneFile}`);
             
-            // Add zone to named.conf.local
-            await bindConfig.addZoneToConfig(zoneName, zoneFile);
+            // Add zone to named.conf.local; support view-assignment for split-horizon
+            if (options.view) {
+                // look up view ACL from settings if present
+                const settingsViews = settings.resolver?.views || [];
+                const viewObj = settingsViews.find(v => v.name === options.view);
+                const viewAcl = viewObj ? viewObj.acl : { allow: ['any'], deny: [] };
+                await bindConfig.addZoneToViewConfig(zoneName, zoneFile, options.view, viewAcl);
+                // Update settings to include this zone in the view's zones list
+                try {
+                    const settingsUtil = require('../utils/settings');
+                    const settingsAll = await settingsUtil.loadSettings();
+                    const viewsList = settingsAll.resolver?.views || [];
+                    const vindex = viewsList.findIndex(v => v.name === options.view);
+                    if (vindex !== -1) {
+                        viewsList[vindex].zones = viewsList[vindex].zones || [];
+                        if (!viewsList[vindex].zones.includes(zoneName)) {
+                            viewsList[vindex].zones.push(zoneName);
+                            await settingsUtil.updateSettings({ resolver: { views: viewsList } });
+                        }
+                    }
+                } catch (err) {
+                    console.warn(`Warning: Could not update settings with new zone view: ${err.message}`);
+                }
+            } else {
+                await bindConfig.addZoneToConfig(zoneName, zoneFile);
+            }
             console.log(`✓ Added zone to named.conf.local`);
             
             // Reload Bind if auto-reload is enabled
@@ -401,19 +497,60 @@ class BindService {
             // Load settings
             const settings = await settingsUtil.loadSettings();
             
-            const { zone } = await this.getZone(zoneName);
+            let zoneData = null;
+            let zoneFile = null;
+            
+            try {
+                const result = await this.getZone(zoneName);
+                zoneData = result.zone;
+                zoneFile = result.zone.file;
+            } catch (err) {
+                // If getZone fails (e.g., zone file missing), try to get zone file from config
+                console.warn(`Warning: Could not get full zone data: ${err.message}`);
+                
+                // Try to find zone file path from config
+                const content = await fs.readFile(this.namedConfLocal, 'utf8');
+                const zoneFileRegex = new RegExp(`zone\\s+"${zoneName}"\\s*\\{[\\s\\S]*?file\\s+"([^"]+)";`, 'g');
+                const match = zoneFileRegex.exec(content);
+                if (match) {
+                    zoneFile = match[1];
+                }
+            }
             
             // Remove from named.conf.local
             await bindConfig.removeZoneFromConfig(zoneName);
             
-            // Backup zone file before deleting (always backup on delete)
-            const backupFile = `${zone.file}.backup.${Date.now()}`;
-            await fs.copy(zone.file, backupFile);
-            console.log(`✓ Backed up zone file to ${backupFile}`);
-            
-            // Delete zone file
-            await fs.remove(zone.file);
-            console.log(`✓ Deleted zone file`);
+            // Backup and delete zone file if it exists
+            if (zoneFile && await fs.pathExists(zoneFile)) {
+                const backupFile = `${zoneFile}.backup.${Date.now()}`;
+                await fs.copy(zoneFile, backupFile);
+                console.log(`✓ Backed up zone file to ${backupFile}`);
+                
+                // Delete zone file
+                await fs.remove(zoneFile);
+                console.log(`✓ Deleted zone file`);
+            } else if (zoneFile) {
+                console.log(`ℹ Zone file does not exist (may be a slave zone not yet synced): ${zoneFile}`);
+            }
+
+            // Remove from any view assignments in settings
+            try {
+                const settingsUtil = require('../utils/settings');
+                const settingsAll = await settingsUtil.loadSettings();
+                const viewsList = settingsAll.resolver?.views || [];
+                let updated = false;
+                for (let v of viewsList) {
+                    if (v.zones && v.zones.includes(zoneName)) {
+                        v.zones = v.zones.filter(z => z !== zoneName);
+                        updated = true;
+                    }
+                }
+                if (updated) {
+                    await settingsUtil.updateSettings({ resolver: { views: viewsList } });
+                }
+            } catch (err) {
+                console.warn(`Warning: Failed to remove zone from view settings: ${err.message}`);
+            }
             
             // Validate config before reload if enabled
             if (settings.zones.validateBeforeReload) {
@@ -444,12 +581,105 @@ class BindService {
             
             // Log activity
             await activityLogger.zoneDeleted(zoneName, {
-                backupFile: backupFile
+                zoneFile: zoneFile
             });
             
             return { success: true };
         } catch (error) {
             throw new Error(`Failed to delete zone: ${error.message}`);
+        }
+    }
+
+    /**
+     * Reassign zone to another view
+     */
+    async reassignZone(zoneName, newViewName) {
+        try {
+            // Prevent reassigning system zones
+            if (zoneName === '.' || zoneName === 'adblock') {
+                throw new Error(`Cannot reassign system zone: ${zoneName}`);
+            }
+
+            // Load settings
+            const settings = await settingsUtil.loadSettings();
+
+            // current zone info
+            const { zone } = await this.getZone(zoneName);
+            if (!zone) throw new Error(`Zone ${zoneName} not found`);
+            const zoneFile = zone.file;
+            const currentView = zone.view;
+
+            // If same view, do nothing
+            if ((currentView || '') === (newViewName || '')) {
+                return { success: true, message: 'Zone already assigned to that view' };
+            }
+
+            // Find target view ACL from settings
+            const viewsList = settings.resolver?.views || [];
+            const targetViewObj = viewsList.find(v => v.name === newViewName);
+            const targetViewAcl = targetViewObj ? targetViewObj.acl : { allow: ['any'], deny: [] };
+
+            // Build new named.conf.local content with zone moved
+            const newContent = await bindConfig.buildMoveZoneToViewContent(zoneName, zoneFile, newViewName, targetViewAcl);
+
+            // Write tmp file and validate via named-checkconf -z
+            const tmpFile = `${this.namedConfLocal}.tmp.${Date.now()}`;
+            await fs.writeFile(tmpFile, newContent, 'utf8');
+
+            // Validate config using named-checkconf -z against tmp file
+            try {
+                await execPromise(`named-checkconf -z ${tmpFile}`);
+            } catch (err) {
+                throw new Error(`Config validation failed for proposed change: ${err.stderr || err.message}`);
+            }
+
+            // Now backup current conf and apply
+            const backupFile = `${this.namedConfLocal}.backup.${Date.now()}`;
+            await fs.copyFile(this.namedConfLocal, backupFile);
+            await fs.move(tmpFile, this.namedConfLocal, { overwrite: true });
+            // Do not update settings yet; perform reload first to ensure configuration is valid
+
+            // Optionally reload Bind
+            if (settings.zones.autoReload) {
+                try {
+                    await this.reloadBind();
+                } catch (err) {
+                    // rollback config
+                    await fs.copyFile(backupFile, this.namedConfLocal);
+                    throw new Error(`Reload failed after reassign; config restored: ${err.message}`);
+                }
+            }
+
+            // Update settings: remove from old view, add to new (only after successful reload)
+            try {
+                const settingsAll = await settingsUtil.loadSettings();
+                const viewsList2 = settingsAll.resolver?.views || [];
+                for (let v of viewsList2) {
+                    if (v.zones && v.zones.includes(zoneName)) {
+                        v.zones = v.zones.filter(z => z !== zoneName);
+                    }
+                }
+                let targetIndex = viewsList2.findIndex(v => v.name === newViewName);
+                if (targetIndex !== -1) {
+                    viewsList2[targetIndex].zones = viewsList2[targetIndex].zones || [];
+                    if (!viewsList2[targetIndex].zones.includes(zoneName)) {
+                        viewsList2[targetIndex].zones.push(zoneName);
+                    }
+                } else {
+                    // If new view isn't present in settings, add it with default ACL and zone
+                    const newViewObj = { name: newViewName, acl: { allow: ['any'], deny: [] }, zones: [zoneName] };
+                    viewsList2.push(newViewObj);
+                }
+                await settingsUtil.updateSettings({ resolver: { views: viewsList2 } });
+            } catch (err) {
+                console.warn(`Warning: Could not update settings view membership: ${err.message}`);
+            }
+
+            await activityLogger.custom('zone', 'update', `Zone moved to ${newViewName || 'global'}`, zoneName, { view: newViewName });
+
+            return { success: true };
+        } catch (error) {
+            throw new Error(`Failed to reassign zone: ${error.message}`);
         }
     }
 
@@ -656,17 +886,20 @@ ${nsHostname}   IN      A       127.0.0.1
             // Load current settings
             const settings = await settingsUtil.loadSettings();
             
+            // Use provided resolver options or fall back to saved settings
+            const resolverSettings = options.resolver || settings.resolver || {};
+            
             // Generate resolver configuration
-            const config = this.generateResolverConfig(settings.resolver);
+            const config = this.generateResolverConfig(resolverSettings);
             
             // Write configuration to named.conf.options
             const configPath = settings.bind.namedConfOptions;
             await fs.writeFile(configPath, config, 'utf8');
             
             // Handle adblock zone if enabled
-            if (settings.resolver.adblock?.enabled) {
+            if (resolverSettings.adblock?.enabled) {
                 // Setup single adblock zone
-                await this.setupAdblockZone(settings.resolver.adblock);
+                await this.setupAdblockZone(resolverSettings.adblock);
             } else {
                 await this.removeAdblockZone();
             }
@@ -847,13 +1080,25 @@ ${nsHostname}   IN      A       127.0.0.1
      */
     async reloadBind() {
         try {
-            const { stdout, stderr } = await execPromise('rndc reload');
-            console.log(`✓ Bind reloaded successfully`);
-            
-            // Log activity
-            await activityLogger.bindReloaded();
-            
-            return { success: true, message: stdout };
+            // Try systemctl reload first, fallback to rndc
+            try {
+                const { stdout, stderr } = await execPromise('systemctl reload named');
+                console.log(`✓ Bind reloaded successfully`);
+                
+                // Log activity
+                await activityLogger.bindReloaded();
+                
+                return { success: true, message: stdout };
+            } catch (systemctlError) {
+                console.log('systemctl reload failed, trying rndc...');
+                const { stdout, stderr } = await execPromise('rndc reload');
+                console.log(`✓ Bind reloaded successfully`);
+                
+                // Log activity
+                await activityLogger.bindReloaded();
+                
+                return { success: true, message: stdout };
+            }
         } catch (error) {
             console.error(`✗ Failed to reload Bind: ${error.message}`);
             throw new Error(`Bind reload failed: ${error.stderr || error.message}`);
@@ -1110,6 +1355,7 @@ ${nsHostname}   IN      A       127.0.0.1
      * Add adblock zone to named.conf.local
      */
     async addAdblockZoneToConfig(zoneName, zoneFile) {
+        const bindConfig = require('../utils/bindConfig');
         const configPath = '/etc/bind/named.conf.local';
         let configContent = '';
         
@@ -1120,48 +1366,696 @@ ${nsHostname}   IN      A       127.0.0.1
             configContent = '';
         }
         
-        // Check if zone already exists
+        // Check if zone already exists in any view
         if (configContent.includes(`zone "${zoneName}"`)) {
             return; // Already exists
         }
         
-        // Add zone configuration
-        const zoneConfig = `
-// Adblock RPZ Zone
-zone "${zoneName}" {
-    type master;
-    file "${zoneFile}";
-    allow-query { any; };
-};
-`;
+        const zoneBlock = `    zone "${zoneName}" {
+        type master;
+        file "${zoneFile}";
+        allow-query { any; };
+    };`;
         
-        configContent += zoneConfig;
-        await fs.writeFile(configPath, configContent, 'utf8');
+        // Add zone to each view
+        // Find each view pattern and add zone before its closing };
+        let newContent = configContent;
+        
+        // Use a more robust approach: find view blocks by matching opening and closing braces
+        let pos = 0;
+        while (true) {
+            // Find the next view
+            const viewStart = newContent.indexOf('view ', pos);
+            if (viewStart === -1) break;
+            
+            // Find the opening brace of this view
+            const openBracePos = newContent.indexOf('{', viewStart);
+            if (openBracePos === -1) break;
+            
+            // Count braces to find the closing brace of this view
+            let braceCount = 0;
+            let closePos = -1;
+            for (let i = openBracePos; i < newContent.length; i++) {
+                if (newContent[i] === '{') braceCount++;
+                else if (newContent[i] === '}') {
+                    braceCount--;
+                    if (braceCount === 0) {
+                        closePos = i;
+                        break;
+                    }
+                }
+            }
+            
+            if (closePos !== -1) {
+                // Found the closing brace of this view
+                // Check if zone already exists in this view
+                const viewContent = newContent.substring(viewStart, closePos + 1);
+                if (!viewContent.includes(`zone "${zoneName}"`)) {
+                    // Insert zone before the closing };
+                    // Find the newline before the closing }
+                    let insertPos = closePos;
+                    while (insertPos > 0 && newContent[insertPos - 1] !== '\n') {
+                        insertPos--;
+                    }
+                    newContent = newContent.substring(0, insertPos) + zoneBlock + '\n' + newContent.substring(insertPos);
+                }
+                
+                // Move position forward for next iteration
+                pos = viewStart + 20; // Move past "view" string
+            } else {
+                break;
+            }
+        }
+        
+        // Write with validation
+        await bindConfig.writeConfigWithValidation(configPath, newContent);
     }
 
     /**
      * Remove adblock zone from named.conf.local
      */
     async removeAdblockZoneFromConfig(zoneName) {
+        const bindConfig = require('../utils/bindConfig');
         const configPath = '/etc/bind/named.conf.local';
         
         try {
             let configContent = await fs.readFile(configPath, 'utf8');
             
-            // Remove zone configuration with proper regex
-            const zoneRegex = new RegExp(`\\n// Adblock RPZ Zone\\nzone "${zoneName}" \\{[^}]*\\};\\n`, 'g');
-            configContent = configContent.replace(zoneRegex, '\n');
+            // Split into lines
+            let lines = configContent.split('\n');
+            let result = [];
+            let i = 0;
             
-            // Clean up any extra whitespace
-            configContent = configContent.trim();
-            if (configContent === '') {
-                configContent = '';
+            while (i < lines.length) {
+                const line = lines[i];
+                
+                // Check if this line starts a zone block for our target zone
+                if (line.trim().startsWith(`zone "${zoneName}"`)) {
+                    // Skip this zone block entirely
+                    // Find the closing }; and skip all lines until then
+                    let braceCount = 0;
+                    let foundBrace = false;
+                    
+                    while (i < lines.length) {
+                        for (const char of lines[i]) {
+                            if (char === '{') {
+                                braceCount++;
+                                foundBrace = true;
+                            } else if (char === '}') {
+                                braceCount--;
+                            }
+                        }
+                        
+                        // Check if this line ends the zone block
+                        if (foundBrace && braceCount === 0 && lines[i].trim().endsWith('};')) {
+                            // Skip this line and move to next
+                            i++;
+                            break;
+                        }
+                        
+                        i++;
+                    }
+                } else {
+                    // Keep this line
+                    result.push(line);
+                    i++;
+                }
             }
             
-            await fs.writeFile(configPath, configContent, 'utf8');
+            let updatedContent = result.join('\n');
+            
+            // Clean up extra blank lines
+            updatedContent = updatedContent.replace(/\n\n\n+/g, '\n\n');
+            updatedContent = updatedContent.trim();
+            
+            // Write with validation
+            await bindConfig.writeConfigWithValidation(configPath, updatedContent);
         } catch (error) {
             // Ignore if file doesn't exist or zone not found
+            console.warn('Warning: Could not remove adblock zone from config:', error.message);
         }
+    }
+
+    /**
+     * List all ACLs from BIND config files
+     */
+    async listACLs() {
+        try {
+            const aclsMap = new Map();
+            const configFiles = [
+                '/etc/bind/named.conf.options',
+                '/etc/bind/named.conf.local'
+            ];
+
+            for (const filePath of configFiles) {
+                try {
+                    const content = await fs.readFile(filePath, 'utf8');
+                    // Parse ACL definitions: acl "name" { ... };
+                    const aclRegex = /acl\s+"([^"]+)"\s*\{([\s\S]*?)\};/g;
+                    let match;
+                    
+                    while ((match = aclRegex.exec(content)) !== null) {
+                        const aclName = match[1];
+                        const aclBody = match[2].trim();
+                        
+                        // Parse ACL entries (IP addresses, ranges, special keywords)
+                        const entries = [];
+                        const entryRegex = /(!?)([^\s;]+)/g;
+                        let entryMatch;
+                        
+                        while ((entryMatch = entryRegex.exec(aclBody)) !== null) {
+                            const negated = entryMatch[1] === '!';
+                            const address = entryMatch[2];
+                            entries.push({
+                                address,
+                                negated,
+                                description: this.getAddressDescription(address)
+                            });
+                        }
+                        
+                        aclsMap.set(aclName, {
+                            name: aclName,
+                            entries,
+                            file: filePath,
+                            raw: aclBody
+                        });
+                    }
+                } catch (err) {
+                    console.warn(`Could not read ACLs from ${filePath}:`, err.message);
+                }
+            }
+
+            return Array.from(aclsMap.values());
+        } catch (error) {
+            console.error('Error listing ACLs:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get description for an address entry
+     */
+    getAddressDescription(address) {
+        const descriptions = {
+            'any': 'All hosts',
+            'none': 'No hosts',
+            'localhost': 'Local server addresses',
+            'localnets': 'Local network addresses'
+        };
+        
+        if (descriptions[address]) {
+            return descriptions[address];
+        }
+        
+        // Check if it's an IP address or CIDR range
+        if (address.includes('/')) {
+            return `Network range`;
+        } else if (address.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+            return 'IP address';
+        } else if (address.match(/^[0-9a-fA-F:]+$/)) {
+            return 'IPv6 address';
+        }
+        
+        return 'Custom';
+    }
+
+    /**
+     * Create a new ACL
+     */
+    async createACL(name, entries, description = '') {
+        try {
+            // Validate name
+            if (!name || typeof name !== 'string') {
+                throw new Error('ACL name is required');
+            }
+            
+            if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+                throw new Error('ACL name can only contain letters, numbers, hyphens, and underscores');
+            }
+
+            // Check if ACL already exists
+            const existingACLs = await this.listACLs();
+            if (existingACLs.some(acl => acl.name === name)) {
+                throw new Error(`ACL "${name}" already exists`);
+            }
+
+            // Build ACL entry lines
+            let aclBody = entries.map(entry => {
+                const prefix = entry.negated ? '!' : '';
+                return `        ${prefix}${entry.address};`;
+            }).join('\n');
+
+            // Format ACL definition
+            const aclDef = `acl "${name}" {\n${aclBody}\n};\n\n`;
+
+            // Add to named.conf.local
+            let content = await fs.readFile(this.namedConfLocal, 'utf8');
+            
+            // Add ACL at the beginning (after any existing acls or comments)
+            const insertPos = content.search(/^(\/\/|#|acl)/m);
+            if (insertPos !== -1) {
+                content = content.slice(0, insertPos) + aclDef + content.slice(insertPos);
+            } else {
+                content = aclDef + content;
+            }
+
+            await bindConfig.writeConfigWithValidation(this.namedConfLocal, content);
+            
+            await activityLogger.custom('acl', 'create', `ACL "${name}" created with ${entries.length} entries`, name);
+
+            return { success: true, message: `ACL "${name}" created successfully` };
+        } catch (error) {
+            console.error('Error creating ACL:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete an ACL
+     */
+    async deleteACL(name) {
+        try {
+            const configFiles = [
+                '/etc/bind/named.conf.options',
+                '/etc/bind/named.conf.local'
+            ];
+
+            for (const filePath of configFiles) {
+                try {
+                    let content = await fs.readFile(filePath, 'utf8');
+                    const aclRegex = new RegExp(`acl\\s+"${name}"\\s*\\{[\\s\\S]*?\\};\\s*`, 'g');
+                    
+                    if (aclRegex.test(content)) {
+                        content = content.replace(aclRegex, '');
+                        await bindConfig.writeConfigWithValidation(filePath, content);
+                        
+                        await activityLogger.custom('acl', 'delete', `ACL "${name}" deleted`, name);
+                        return { success: true, message: `ACL "${name}" deleted successfully` };
+                    }
+                } catch (err) {
+                    console.warn(`Could not process ${filePath}:`, err.message);
+                }
+            }
+
+            throw new Error(`ACL "${name}" not found`);
+        } catch (error) {
+            console.error('Error deleting ACL:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Convert a master zone to slave zone
+     * zone name, master server IP, and optional ACL for allow-transfer
+     */
+    async convertToSlaveZone(zoneName, masterIp, allowTransferAcl = 'none') {
+        try {
+            if (!zoneName || !masterIp) {
+                throw new Error('Zone name and master IP are required');
+            }
+
+            // Validate IP format
+            if (!this.isValidIp(masterIp)) {
+                throw new Error('Invalid master server IP address');
+            }
+
+            let content = await fs.readFile(this.namedConfLocal, 'utf8');
+            
+            // Remove existing zone definition for this zone (from any location)
+            const zoneRemovalRegex = new RegExp(`zone\\s+"${zoneName}"\\s*\\{[\\s\\S]*?\\};\\s*`, 'g');
+            content = content.replace(zoneRemovalRegex, '');
+
+            // Create slave zone definition with proper indentation for inside view
+            const slaveZoneDef = `
+    zone "${zoneName}" {
+        type slave;
+        file "/etc/bind/zones/slave/${zoneName}.db";
+        masters { ${masterIp}; };
+        allow-transfer { ${allowTransferAcl}; };
+    };`;
+
+            // Find global view and add zone before closing brace
+            // If no global view, create standalone zone with proper formatting
+            let added = false;
+            
+            // Try to find 'global' view
+            const globalViewRegex = /view\s+"global"\s*\{([\s\S]*?)\n\};/;
+            const globalMatch = globalViewRegex.exec(content);
+            
+            if (globalMatch) {
+                // Add zone inside global view, before closing brace
+                const insertPoint = content.lastIndexOf('};', globalMatch.index + globalMatch[0].length);
+                if (insertPoint !== -1) {
+                    content = content.slice(0, insertPoint) + slaveZoneDef + '\n' + content.slice(insertPoint);
+                    added = true;
+                }
+            }
+
+            // If not added yet, try to find any view and add there
+            if (!added) {
+                const firstViewMatch = /view\s+"[^"]+"\s*\{/;
+                const viewPos = content.search(firstViewMatch);
+                if (viewPos !== -1) {
+                    // Find this view's closing brace
+                    let braceCount = 0;
+                    let inBrace = false;
+                    for (let i = viewPos; i < content.length; i++) {
+                        if (content[i] === '{') {
+                            braceCount++;
+                            inBrace = true;
+                        } else if (content[i] === '}') {
+                            braceCount--;
+                            if (inBrace && braceCount === 0) {
+                                content = content.slice(0, i) + slaveZoneDef + '\n' + content.slice(i);
+                                added = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If still not added, add at top level before views
+            if (!added) {
+                const viewPos = content.search(/^view/m);
+                if (viewPos !== -1) {
+                    content = content.slice(0, viewPos) + slaveZoneDef + '\n\n' + content.slice(viewPos);
+                } else {
+                    content = slaveZoneDef + '\n\n' + content;
+                }
+            }
+
+            await bindConfig.writeConfigWithValidation(this.namedConfLocal, content);
+            
+            // Ensure slave directory exists and create placeholder zone file
+            await fs.ensureDir('/etc/bind/zones/slave');
+            
+            const slaveZoneFile = `/etc/bind/zones/slave/${zoneName}.db`;
+            if (!await fs.pathExists(slaveZoneFile)) {
+                // Create placeholder SOA record for slave zone
+                const placeholderContent = `; Slave zone file for ${zoneName}
+; This file will be populated when zone transfers from master server
+$ORIGIN ${zoneName}.
+$TTL 3600
+@   IN  SOA ns1.${zoneName}. hostmaster.${zoneName}. (
+                1           ; serial
+                3600        ; refresh
+                1800        ; retry
+                604800      ; expire
+                86400 )     ; minimum
+    IN  NS  ns1.${zoneName}.
+`;
+                await fs.writeFile(slaveZoneFile, placeholderContent);
+                console.log(`✓ Created placeholder slave zone file: ${slaveZoneFile}`);
+            }
+
+            await activityLogger.custom('zone', 'convert', `Zone "${zoneName}" converted to slave (master: ${masterIp})`, zoneName);
+
+            return { 
+                success: true, 
+                message: `Zone "${zoneName}" successfully converted to slave zone`
+            };
+        } catch (error) {
+            console.error('Error converting to slave zone:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Convert a slave zone to master zone
+     */
+    async convertToMasterZone(zoneName, file) {
+        try {
+            if (!zoneName || !file) {
+                throw new Error('Zone name and zone file are required');
+            }
+
+            let content = await fs.readFile(this.namedConfLocal, 'utf8');
+            
+            // Remove existing zone definition for this zone
+            const zoneRemovalRegex = new RegExp(`zone\\s+"${zoneName}"\\s*\\{[\\s\\S]*?\\};\\s*`, 'g');
+            content = content.replace(zoneRemovalRegex, '');
+
+            // Resolve file path
+            const zoneFile = file.startsWith('/') ? file : '/etc/bind/zones/' + file;
+
+            // Create master zone definition with proper indentation
+            const masterZoneDef = `
+    zone "${zoneName}" {
+        type master;
+        file "${zoneFile}";
+        allow-transfer { none; };
+        allow-update { none; };
+    };`;
+
+            // Try to find 'global' view and add zone
+            let added = false;
+            const globalViewRegex = /view\s+"global"\s*\{([\s\S]*?)\n\};/;
+            const globalMatch = globalViewRegex.exec(content);
+            
+            if (globalMatch) {
+                const insertPoint = content.lastIndexOf('};', globalMatch.index + globalMatch[0].length);
+                if (insertPoint !== -1) {
+                    content = content.slice(0, insertPoint) + masterZoneDef + '\n' + content.slice(insertPoint);
+                    added = true;
+                }
+            }
+
+            // If not added yet, try to find any view
+            if (!added) {
+                const firstViewMatch = /view\s+"[^"]+"\s*\{/;
+                const viewPos = content.search(firstViewMatch);
+                if (viewPos !== -1) {
+                    let braceCount = 0;
+                    let inBrace = false;
+                    for (let i = viewPos; i < content.length; i++) {
+                        if (content[i] === '{') {
+                            braceCount++;
+                            inBrace = true;
+                        } else if (content[i] === '}') {
+                            braceCount--;
+                            if (inBrace && braceCount === 0) {
+                                content = content.slice(0, i) + masterZoneDef + '\n' + content.slice(i);
+                                added = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!added) {
+                const viewPos = content.search(/^view/m);
+                if (viewPos !== -1) {
+                    content = content.slice(0, viewPos) + masterZoneDef + '\n\n' + content.slice(viewPos);
+                } else {
+                    content = masterZoneDef + '\n\n' + content;
+                }
+            }
+
+            await bindConfig.writeConfigWithValidation(this.namedConfLocal, content);
+
+            await activityLogger.custom('zone', 'convert', `Zone "${zoneName}" converted to master`, zoneName);
+
+            return { 
+                success: true, 
+                message: `Zone "${zoneName}" successfully converted to master zone`
+            };
+        } catch (error) {
+            console.error('Error converting to master zone:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update slave zone master server
+     */
+    async updateSlaveZoneMaster(zoneName, newMasterIp) {
+        try {
+            if (!zoneName || !newMasterIp) {
+                throw new Error('Zone name and master IP are required');
+            }
+
+            if (!this.isValidIp(newMasterIp)) {
+                throw new Error('Invalid master server IP address');
+            }
+
+            let content = await fs.readFile(this.namedConfLocal, 'utf8');
+            
+            // Find and update the slave zone's masters statement
+            const zoneRegex = new RegExp(
+                `(zone\\s+"${zoneName}"\\s*\\{[\\s\\S]*?masters\\s*\\{\\s*)([^}]+)(\\s*\\};[\\s\\S]*?\\};)`,
+                'g'
+            );
+
+            if (!zoneRegex.test(content)) {
+                throw new Error(`Slave zone "${zoneName}" not found`);
+            }
+
+            content = content.replace(zoneRegex, `$1${newMasterIp};$3`);
+
+            await bindConfig.writeConfigWithValidation(this.namedConfLocal, content);
+
+            await activityLogger.custom('zone', 'update', `Slave zone "${zoneName}" master updated to ${newMasterIp}`, zoneName);
+
+            return { 
+                success: true, 
+                message: `Master server for "${zoneName}" updated to ${newMasterIp}`
+            };
+        } catch (error) {
+            console.error('Error updating slave zone master:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get slave zones
+     */
+    async getSlaveZones() {
+        try {
+            const content = await fs.readFile(this.namedConfLocal, 'utf8');
+            const slaveZones = [];
+
+            // Parse slave zones more carefully - match zone blocks properly
+            // First find all zone blocks, then check if they have "type slave"
+            const zoneBlockRegex = /zone\s+"([^"]+)"\s*\{([\s\S]*?)\n\s*\};/g;
+            let match;
+
+            while ((match = zoneBlockRegex.exec(content)) !== null) {
+                const zoneName = match[1];
+                const zoneBody = match[2];
+
+                // Check if this zone has "type slave"
+                if (!/type\s+slave/.test(zoneBody)) {
+                    continue;
+                }
+
+                // Extract masters
+                const mastersRegex = /masters\s*\{\s*([^}]+)\s*\};/;
+                const mastersMatch = mastersRegex.exec(zoneBody);
+
+                if (mastersMatch) {
+                    const masterIps = mastersMatch[1]
+                        .split(';')
+                        .map(ip => ip.trim())
+                        .filter(ip => ip && !ip.startsWith('//'));
+
+                    slaveZones.push({
+                        name: zoneName,
+                        type: 'slave',
+                        masters: masterIps
+                    });
+                }
+            }
+
+            return slaveZones;
+        } catch (error) {
+            console.error('Error getting slave zones:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get master zones
+     */
+    async getMasterZones() {
+        try {
+            const content = await fs.readFile(this.namedConfLocal, 'utf8');
+            const masterZones = [];
+
+            // Parse master zones - match zone blocks properly
+            const zoneBlockRegex = /zone\s+"([^"]+)"\s*\{([\s\S]*?)\n\s*\};/g;
+            let match;
+
+            while ((match = zoneBlockRegex.exec(content)) !== null) {
+                const zoneName = match[1];
+                const zoneBody = match[2];
+
+                // Check if this zone has "type master"
+                if (!/type\s+master/.test(zoneBody)) {
+                    continue;
+                }
+
+                // Extract file
+                const fileRegex = /file\s+"([^"]+)";/;
+                const fileMatch = fileRegex.exec(zoneBody);
+
+                if (fileMatch) {
+                    masterZones.push({
+                        name: zoneName,
+                        type: 'master',
+                        file: fileMatch[1]
+                    });
+                }
+            }
+
+            return masterZones;
+        } catch (error) {
+            console.error('Error getting master zones:', error);
+            return [];
+        }
+    }
+
+    /**
+     * Set allow-transfer ACL for a zone
+     */
+    async setZoneAllowTransfer(zoneName, aclName) {
+        try {
+            if (!zoneName || !aclName) {
+                throw new Error('Zone name and ACL name are required');
+            }
+
+            let content = await fs.readFile(this.namedConfLocal, 'utf8');
+
+            // Find zone and update or add allow-transfer
+            const zoneRegex = new RegExp(
+                `(zone\\s+"${zoneName}"\\s*\\{[\\s\\S]*?)(allow-transfer\\s*\\{[^}]+\\};|)(\\s*\\};)`,
+                'g'
+            );
+
+            if (!zoneRegex.test(content)) {
+                throw new Error(`Zone "${zoneName}" not found`);
+            }
+
+            const allowTransferLine = `allow-transfer { ${aclName}; };`;
+
+            content = content.replace(zoneRegex, (match, before, existing, after) => {
+                // Remove existing allow-transfer if any
+                const beforeClean = before.replace(/allow-transfer\s*\{[^}]+\};\s*/g, '');
+                return `${beforeClean}    ${allowTransferLine}${after}`;
+            });
+
+            await bindConfig.writeConfigWithValidation(this.namedConfLocal, content);
+
+            await activityLogger.custom('zone', 'update', `Zone "${zoneName}" allow-transfer set to ACL "${aclName}"`, zoneName);
+
+            return { 
+                success: true, 
+                message: `Zone "${zoneName}" allow-transfer updated`
+            };
+        } catch (error) {
+            console.error('Error setting zone allow-transfer:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Validate IP address
+     */
+    isValidIp(ip) {
+        // IPv4
+        const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+        if (ipv4Regex.test(ip)) {
+            const parts = ip.split('.');
+            return parts.every(part => parseInt(part) <= 255);
+        }
+
+        // IPv6 (simple check)
+        if (ip.includes(':')) {
+            return true; // Basic IPv6 check
+        }
+
+        return false;
     }
 }
 

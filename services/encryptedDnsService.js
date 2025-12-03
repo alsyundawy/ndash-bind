@@ -18,15 +18,19 @@ class EncryptedDnsService {
         try {
             const settings = await settingsUtil.loadSettings();
 
-            if (settings.resolver?.doh?.enabled) {
-                await this.startDoH(settings.resolver.doh);
+            // Only start if not already running
+            if (!this.isRunning) {
+                if (settings.resolver?.doh?.enabled) {
+                    await this.startDoH(settings.resolver.doh);
+                }
+
+                if (settings.resolver?.dot?.enabled) {
+                    await this.startDoT(settings.resolver.dot);
+                }
+
+                this.isRunning = true;
             }
 
-            if (settings.resolver?.dot?.enabled) {
-                await this.startDoT(settings.resolver.dot);
-            }
-
-            this.isRunning = true;
             console.log('✓ Encrypted DNS services started');
         } catch (error) {
             console.error('Error starting encrypted DNS services:', error);

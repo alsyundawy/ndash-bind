@@ -35,6 +35,19 @@
         </div>
 
         <div class="form-group">
+            <label for="view" class="form-label">Assign to View (Split-Horizon)</label>
+            <select id="view" name="view" class="form-input">
+                <option value="global">(No view) - Global</option>
+                <% if (views && views.length) { %>
+                    <% views.filter(v => v.name !== 'global').forEach(v => { %>
+                        <option value="<%= v.name %>"><%= v.name %></option>
+                    <% }) %>
+                <% } %>
+            </select>
+            <p class="form-help">Assign this zone to a specific view for split-horizon DNS. Leave blank to use global view.</p>
+        </div>
+
+        <div class="form-group">
             <label for="nameserver" class="form-label">Name Server</label>
             <input type="text" id="nameserver" name="nameserver" class="form-input" placeholder="satu.dionipe.id.">
             <p class="form-help">Primary name server (leave empty for auto: ns1.yourzone.)</p>

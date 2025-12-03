@@ -39,6 +39,16 @@
             <span>Create Zone</span>
         </a>
         
+        <a href="/views" class="nav-item">
+            <i class="fas fa-eye-slash"></i>
+            <span>ACL Views</span>
+        </a>
+
+        <a href="/acl" class="nav-item <%= title && title.includes('ACL') ? 'active' : '' %>">
+            <i class="fas fa-shield-alt"></i>
+            <span>Access Control</span>
+        </a>
+        
         <button onclick="reloadBindFromSidebar()" class="nav-item w-full text-left">
             <i class="fas fa-sync-alt" id="reload-icon-sidebar"></i>
             <span>Reload Bind</span>
@@ -71,6 +81,11 @@
         <a href="/activity" class="nav-item">
             <i class="fas fa-history"></i>
             <span>Activity Log</span>
+        </a>
+
+        <a href="/test-toast" class="nav-item">
+            <i class="fas fa-bell"></i>
+            <span>Test Toasts</span>
         </a>
     </nav>
 
@@ -117,18 +132,24 @@ function reloadBindFromSidebar() {
 }
 
 function showNotification(message, type) {
-    const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
-    const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
-    
-    const notification = document.createElement('div');
-    notification.className = `fixed top-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg z-50`;
-    notification.innerHTML = `<i class="fas ${icon} mr-2"></i>${message}`;
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.style.opacity = '0';
-        notification.style.transition = 'opacity 0.5s';
-        setTimeout(() => notification.remove(), 500);
-    }, 3000);
+    // Use the new toast system if available
+    if (typeof toastManager !== 'undefined') {
+        toastManager.show(message, type === 'success' ? 'success' : 'error');
+    } else {
+        // Fallback to old notification system
+        const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+        const icon = type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle';
+
+        const notification = document.createElement('div');
+        notification.className = `fixed top-4 right-4 ${bgColor} text-white px-6 py-3 rounded-lg shadow-lg z-50`;
+        notification.innerHTML = `<i class="fas ${icon} mr-2"></i>${message}`;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            notification.style.transition = 'opacity 0.5s';
+            setTimeout(() => notification.remove(), 500);
+        }, 3000);
+    }
 }
 </script>

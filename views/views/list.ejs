@@ -1,0 +1,79 @@
+<%- include('../partials/header-standalone') %>
+
+<div class="mb-6 flex items-center justify-between">
+    <div>
+        <h3 class="text-2xl font-bold text-gray-800">ACL Views (Split-Horizon)</h3>
+        <p class="text-gray-600 mt-1">Manage DNS views and client ACLs for split-horizon DNS</p>
+    </div>
+    <a href="/views/new" class="btn btn-primary">
+        <i class="fas fa-plus mr-2"></i>
+        Create New View
+    </a>
+</div>
+
+<% if (typeof error !== 'undefined' && error) { %>
+    <div class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+        <i class="fas fa-exclamation-circle mr-2"></i>
+        <%= error %>
+    </div>
+<% } %>
+
+<% if (typeof success !== 'undefined' && success) { %>
+    <div class="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded mb-4">
+        <i class="fas fa-check-circle mr-2"></i>
+        <%= success %>
+    </div>
+<% } %>
+
+<div class="content-card">
+    <div class="overflow-x-auto">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>View Name</th>
+                    <th>Allowed</th>
+                    <th>Denied</th>
+                    <th>Zones Assigned</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!views || views.length === 0) { %>
+                    <tr>
+                        <td colspan="5" class="text-center py-8 text-gray-500">No views configured yet.</td>
+                    </tr>
+                <% } else { %>
+                    <% views.forEach(view => { %>
+                        <tr>
+                            <td>
+                                <div class="flex items-center">
+                                    <i class="fas fa-eye-slash text-indigo-600 mr-2"></i>
+                                    <span class="font-semibold text-gray-900"><%= view.name %></span>
+                                </div>
+                            </td>
+                            <td class="text-xs text-gray-700">
+                                <%=(view.acl && view.acl.allow) ? view.acl.allow.join(', ') : 'any' %>
+                            </td>
+                            <td class="text-xs text-gray-700"><%=(view.acl && view.acl.deny) ? view.acl.deny.join(', ') : '-' %></td>
+                            <td>
+                                <span class="text-sm text-gray-700"><%= view.zones ? view.zones.length : 0 %></span>
+                            </td>
+                            <td>
+                                <div class="flex items-center space-x-2">
+                                    <a href="/views/<%= view.name %>/edit" class="btn btn-sm">
+                                        <i class="fas fa-edit"></i>
+                                    </a>
+                                    <form method="POST" action="/views/<%= view.name %>/delete" onsubmit="return confirm('Delete view <%= view.name %>?');">
+                                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    <% }) %>
+                <% } %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<%- include('../partials/footer-standalone') %>
